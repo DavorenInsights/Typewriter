@@ -304,9 +304,21 @@ def render_glyph(base, ch, font, x, baseline_y, rng, cfg, ink_rgb=(45, 43, 40)):
 
     mask = machine_glyph_mask(ch, font, cfg["face"], cfg["machine_seed"])
 
-    # Keep default output dark enough to read.
-    alpha = int(rng.integers(cfg["opacity_min"], cfg["opacity_max"] + 1))
-    alpha = max(alpha, 145)
+    # Ribbon transfer varies per strike. Most letters sit near the ribbon-age
+    # baseline, while occasional keys hit distinctly darker or lighter — like
+    # the photographed pages.
+    midpoint = (cfg["opacity_min"] + cfg["opacity_max"]) / 2
+    alpha = int(rng.normal(midpoint, cfg["strike_variation"]))
+
+    # Randomly stronger strike / fresher patch of ribbon.
+    if rng.random() < cfg["dark_hit_prob"]:
+        alpha += int(rng.integers(22, 55))
+
+    # Randomly weaker ink transfer.
+    if rng.random() < cfg["light_hit_prob"]:
+        alpha -= int(rng.integers(22, 60))
+
+    alpha = int(np.clip(alpha, 55, 255))
 
     strike_mask = mask.point(lambda p: int(p * alpha / 255))
 
@@ -450,13 +462,13 @@ with st.sidebar:
         "Ribbon age",
         ["Fresh", "Used", "Fading"],
         index=1,
-        help="Changes ink density and transfer quality."
+        help="Fresh = dark/consistent; Used = mixed strikes; Fading = lighter with much more letter-to-letter variation."
     )
 
     imperfection = st.slider(
         "Imperfections",
         0, 100, 38, 1,
-        help="Controls spacing quirks, line-start variation, rebound, ink inconsistency and subtle mechanical irregularity together."
+        help="Controls spacing quirks, line-start variation, rebound and mechanical irregularity. Ribbon age controls most ink variation."
     )
 
     font_pt = st.slider("Font size", 9, 18, 13)
@@ -510,17 +522,26 @@ imp = imperfection / 100.0
 
 # Ribbon age controls ink separately from the mechanical imperfections.
 if ribbon_age == "Fresh":
-    opacity_min, opacity_max = 215, 248
-    base_dropout = 0.002
+    opacity_min, opacity_max = 218, 252
+    base_dropout = 0.001
     paper_noise = 2.2
+    strike_variation = 10
+    dark_hit_prob = 0.08
+    light_hit_prob = 0.03
 elif ribbon_age == "Used":
-    opacity_min, opacity_max = 180, 238
-    base_dropout = 0.008
+    opacity_min, opacity_max = 165, 235
+    base_dropout = 0.006
     paper_noise = 3.8
+    strike_variation = 24
+    dark_hit_prob = 0.13
+    light_hit_prob = 0.08
 else:  # Fading
-    opacity_min, opacity_max = 145, 220
-    base_dropout = 0.016
+    opacity_min, opacity_max = 105, 205
+    base_dropout = 0.014
     paper_noise = 4.8
+    strike_variation = 34
+    dark_hit_prob = 0.16
+    light_hit_prob = 0.14
 
 cfg = {
     "jitter_x": 0.03 + imp * 0.16,
@@ -528,6 +549,9 @@ cfg = {
     "rotation": 0.0,
     "opacity_min": opacity_min,
     "opacity_max": opacity_max,
+    "strike_variation": strike_variation,
+    "dark_hit_prob": dark_hit_prob,
+    "light_hit_prob": light_hit_prob,
     "double_strike_prob": 0.002 + imp * 0.016,
     "double_strike_offset": 1.0,
     "dropout_prob": base_dropout + imp * base_dropout,
@@ -542,7 +566,9 @@ cfg = {
     "margin_right_mm": margin_right,
     "margin_top_mm": margin_top,
     "margin_bottom_mm": margin_bottom,
-    "line_height_px": int(font_size_px * line_spacing),
+    # Keep carriage line pitch fixed so Font size changes the LETTER SIZE,
+    # not the distance between lines.
+    "line_height_px": int((13 * dpi / 72) * line_spacing),
     "tracking_px": tracking * dpi / 72.0,
     "seed": int(seed),
     "paper_rgb": (246, 244, 236),
@@ -626,9 +652,14 @@ if "rendered" in st.session_state:
 with st.expander("How the imperfections work"):
     st.write(
         """
-        The single Imperfections slider controls the combined behaviour of the machine:
-        subtle spacing errors, occasional extra spaces, slightly different line starts,
-        ink-transfer variation and rare double strikes. The baseline stays straight.
-        Ribbon age mainly controls how dark and complete the ink transfer looks.
+        **Font size** changes the actual letter size while the carriage line pitch stays fixed.
+
+        **Ribbon age** changes both average ink darkness and how uneven individual
+        strikes are. A Used or Fading ribbon will therefore contain random darker
+        letters among lighter ones, rather than applying one uniform fade to the page.
+
+        **Imperfections** controls the mechanical side: spacing quirks, occasional
+        double spaces, line-start differences and rare horizontal rebound. The
+        baseline remains straight.
         """
     )

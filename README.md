@@ -1,22 +1,9 @@
-# Field Notes Typewriter — Simple UI
+# Field Notes Typewriter v6
 
-A Streamlit A5 typewriter-page generator.
-
-The interface intentionally exposes only:
-- Font
-- Ribbon age
-- Imperfections
-- Font size
-- Optional custom font
-- Page seed
-
-Everything else — margins, paper texture, line-start variation, spacing quirks,
-double-strike probability, ink transfer, indentation and mechanical offsets —
-is derived automatically.
-
-## Run
-
-```bash
-pip install -r requirements.txt
-streamlit run app.py
-```
+Changes:
+- Font size now changes glyph size without automatically changing line spacing.
+- Ribbon age has a much stronger visible effect.
+- Ink density varies per letter/strike.
+- Random characters can be distinctly darker or lighter, similar to a real uneven ribbon.
+- Elite remains the recommended face for the current Field Notes look.
+- Imperfections slider remains focused on mechanical spacing/offset behaviour.
