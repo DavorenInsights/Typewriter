@@ -24,3 +24,14 @@ streamlit run app.py
 - PNG downloads and a ZIP of all pages
 
 The app does not require an AI image model. Your words remain exact and selectable in the input, while the page image is generated deterministically.
+
+
+## v2 refinements
+
+This version reduces vertical wobble heavily. The intended look is now:
+- straight mechanical baselines within a sentence/line
+- slightly different line starts / paragraph indents
+- occasional double spacing between words
+- uneven ribbon darkness
+- rare double strikes and dropouts
+- much less character rotation

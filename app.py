@@ -17,58 +17,58 @@ A5_MM = (148, 210)
 
 PRESETS = {
     "Field Notes (balanced)": {
-        "jitter_x": 0.55,
-        "jitter_y": 0.75,
-        "rotation": 0.55,
+        "jitter_x": 0.28,
+        "jitter_y": 0.10,
+        "rotation": 0.12,
         "opacity_min": 155,
         "opacity_max": 235,
         "double_strike_prob": 0.035,
         "double_strike_offset": 0.8,
         "dropout_prob": 0.020,
-        "char_spacing_jitter": 0.35,
-        "baseline_wander": 0.40,
+        "char_spacing_jitter": 0.10,
+        "baseline_wander": 0.05,
         "paper_noise": 5.0,
         "blur": 0.16,
     },
     "Fresh ribbon": {
-        "jitter_x": 0.30,
-        "jitter_y": 0.35,
-        "rotation": 0.25,
+        "jitter_x": 0.18,
+        "jitter_y": 0.06,
+        "rotation": 0.08,
         "opacity_min": 205,
         "opacity_max": 250,
         "double_strike_prob": 0.012,
         "double_strike_offset": 0.55,
         "dropout_prob": 0.005,
-        "char_spacing_jitter": 0.20,
-        "baseline_wander": 0.22,
+        "char_spacing_jitter": 0.06,
+        "baseline_wander": 0.03,
         "paper_noise": 2.5,
         "blur": 0.08,
     },
     "Used ribbon": {
-        "jitter_x": 0.65,
-        "jitter_y": 0.85,
-        "rotation": 0.65,
+        "jitter_x": 0.34,
+        "jitter_y": 0.12,
+        "rotation": 0.14,
         "opacity_min": 125,
         "opacity_max": 220,
         "double_strike_prob": 0.050,
         "double_strike_offset": 0.95,
         "dropout_prob": 0.032,
-        "char_spacing_jitter": 0.45,
-        "baseline_wander": 0.52,
+        "char_spacing_jitter": 0.14,
+        "baseline_wander": 0.06,
         "paper_noise": 6.0,
         "blur": 0.20,
     },
     "Tired / fading ribbon": {
-        "jitter_x": 0.85,
-        "jitter_y": 1.05,
-        "rotation": 0.85,
+        "jitter_x": 0.40,
+        "jitter_y": 0.16,
+        "rotation": 0.18,
         "opacity_min": 80,
         "opacity_max": 195,
         "double_strike_prob": 0.070,
         "double_strike_offset": 1.15,
         "dropout_prob": 0.060,
-        "char_spacing_jitter": 0.60,
-        "baseline_wander": 0.70,
+        "char_spacing_jitter": 0.18,
+        "baseline_wander": 0.08,
         "paper_noise": 7.5,
         "blur": 0.28,
     },
@@ -198,6 +198,34 @@ def wrap_text(text, font, max_width, letter_spacing=0):
     return lines
 
 
+
+def apply_layout_quirks(lines, rng, indent_variation=3, extra_space_prob=0.07, extra_space_amount=1.8):
+    """
+    Preserve straight typing baselines, but introduce realistic mechanical/human quirks:
+    - slight line-start / paragraph indent variation
+    - occasional extra spacing between words
+    """
+    out = []
+    for i, line in enumerate(lines):
+        if line == "":
+            out.append({"text": "", "indent": 0, "space_boosts": {}})
+            continue
+
+        indent = int(rng.integers(-indent_variation, indent_variation + 1)) if indent_variation > 0 else 0
+
+        # Larger indent variation after blank lines / paragraph starts
+        if i == 0 or (i > 0 and lines[i-1] == ""):
+            indent += int(rng.integers(0, max(1, indent_variation * 2 + 1)))
+
+        boosts = {}
+        for j, ch in enumerate(line):
+            if ch == " " and rng.random() < extra_space_prob:
+                boosts[j] = extra_space_amount
+
+        out.append({"text": line, "indent": indent, "space_boosts": boosts})
+    return out
+
+
 def render_glyph(base, ch, font, x, y, rng, cfg, ink_rgb=(55, 52, 48)):
     """
     Draw one glyph on its own transparent patch, then rotate and composite.
@@ -287,14 +315,24 @@ def render_page(lines, page_index, settings, font_upload=None, reference_image=N
     nominal_char = measure_char(font, "M")
     nominal_line_h = settings["line_height_px"]
 
-    for li, line in enumerate(lines):
+    quirky_lines = apply_layout_quirks(
+        lines,
+        rng,
+        indent_variation=settings["indent_variation"],
+        extra_space_prob=settings["extra_space_prob"],
+        extra_space_amount=settings["extra_space_amount"],
+    )
+
+    for li, item in enumerate(quirky_lines):
+        line = item["text"]
         y = margin_top + li * nominal_line_h
 
-        # Slight baseline drift by line, like paper / carriage variance.
+        # Keep the whole sentence/line on a mostly straight mechanical baseline.
         line_wander = float(rng.normal(0, settings["baseline_wander"]))
-        x = float(margin_left + rng.normal(0, settings["line_start_jitter"]))
+        x = float(margin_left + item["indent"] + rng.normal(0, settings["line_start_jitter"]))
 
         for ci, ch in enumerate(line):
+            # Only tiny character-level movement; no "wavy" handwriting effect.
             char_baseline = line_wander + float(rng.normal(0, settings["micro_baseline_jitter"]))
             render_glyph(
                 base,
@@ -310,6 +348,11 @@ def render_page(lines, page_index, settings, font_upload=None, reference_image=N
             advance = measure_char(font, ch)
             advance += settings["tracking_px"]
             advance += float(rng.normal(0, settings["char_spacing_jitter"]))
+
+            # More authentic error: extra word spacing, not vertical wobble.
+            if ch == " " and ci in item["space_boosts"]:
+                advance += measure_char(font, " ") * item["space_boosts"][ci]
+
             x += max(1.0, advance)
 
     return base.convert("RGB")
@@ -344,6 +387,11 @@ with st.sidebar:
 
     line_spacing = st.slider("Line spacing", 1.0, 2.2, 1.55, 0.05)
     tracking = st.slider("Tracking", -1.0, 3.0, 0.15, 0.05)
+
+    st.header("Layout quirks")
+    indent_variation = st.slider("Paragraph / sentence indent variation", 0, 10, 3)
+    extra_space_prob = st.slider("Occasional double-space chance", 0.0, 0.25, 0.07, 0.01)
+    extra_space_amount = st.slider("Extra-space strength", 1.0, 3.0, 1.8, 0.1)
 
     st.header("Imperfections")
     intensity = st.slider("Overall imperfection", 0.0, 2.0, 1.0, 0.05)
@@ -413,8 +461,11 @@ cfg.update({
     "paper_warmth": 2,
     "ink_rgb": (52, 49, 45),
     "reference_texture_strength": ref_strength,
-    "line_start_jitter": 0.8 * intensity,
-    "micro_baseline_jitter": 0.28 * intensity,
+    "line_start_jitter": 0.35 * intensity,
+    "micro_baseline_jitter": 0.04 * intensity,
+    "indent_variation": int(indent_variation * dpi / 240),
+    "extra_space_prob": extra_space_prob,
+    "extra_space_amount": extra_space_amount,
 })
 
 reference_image = None
@@ -487,8 +538,9 @@ with st.expander("Why this is useful"):
         """
         This does not ask an image model to invent a page. It renders your actual text
         character by character, then adds small seeded imperfections: uneven ink,
-        baseline drift, spacing variation, occasional double strikes, local dropouts,
-        and paper texture.
+        occasional double strikes, local dropouts, small line-start differences,
+        occasional extra word spacing, and paper texture. The baseline is intentionally
+        kept mostly straight so it feels mechanical rather than wavy.
 
         Because the random seed is fixed, a page can be regenerated exactly. Change the
         seed when you want a different physical-looking copy.
