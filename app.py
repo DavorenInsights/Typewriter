@@ -266,6 +266,36 @@ def wrap_text(text, font, max_width, letter_spacing=0):
 
 
 
+
+def wrap_text_fixed_pitch(text, max_chars):
+    """
+    Wrap to a real typewriter carriage width using fixed character cells.
+    Explicit line breaks are preserved.
+    """
+    paragraphs = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    lines = []
+    for para in paragraphs:
+        if para == "":
+            lines.append("")
+            continue
+        words = para.split(" ")
+        current = ""
+        for word in words:
+            candidate = word if not current else current + " " + word
+            if len(candidate) <= max_chars:
+                current = candidate
+            else:
+                if current:
+                    lines.append(current)
+                while len(word) > max_chars:
+                    lines.append(word[:max_chars])
+                    word = word[max_chars:]
+                current = word
+        if current:
+            lines.append(current)
+    return lines
+
+
 def apply_layout_quirks(lines, rng, indent_variation=3, extra_space_prob=0.07, extra_space_amount=1.8):
     """
     Preserve straight typing baselines, but introduce realistic mechanical/human quirks:
@@ -422,13 +452,13 @@ def render_page(lines, page_index, settings, font_upload=None, reference_image=N
                 ink_rgb=settings["ink_rgb"]
             )
 
-            advance = measure_char(font, ch)
-            advance += settings["tracking_px"]
+            # Real typewriter carriage pitch: fixed 10 CPI = 2.54 mm per keystroke.
+            advance = settings["char_pitch_px"]
             advance += float(rng.normal(0, settings["char_spacing_jitter"]))
 
-            # More authentic error: extra word spacing, not vertical wobble.
+            # Occasional extra word space is an additional carriage step.
             if ch == " " and ci in item["space_boosts"]:
-                advance += measure_char(font, " ") * item["space_boosts"][ci]
+                advance += settings["char_pitch_px"] * item["space_boosts"][ci]
 
             x += max(1.0, advance)
 
@@ -445,7 +475,7 @@ st.set_page_config(page_title="Field Notes Typewriter", page_icon="⌨️", layo
 
 st.title("Field Notes Typewriter")
 st.caption(
-    "True A5 output (148 × 210 mm at 300 DPI). Choose the typewriter face, ribbon age, font size and imperfection level."
+    "True A5 output (148 × 210 mm at 300 DPI), calibrated to the uploaded A5 typewriter pages."
 )
 
 with st.sidebar:
@@ -470,8 +500,6 @@ with st.sidebar:
         0, 100, 38, 1,
         help="Controls spacing quirks, line-start variation, rebound and mechanical irregularity. Ribbon age controls most ink variation."
     )
-
-    font_pt = st.slider("Font size", 11, 26, 16)
 
     font_upload = st.file_uploader(
         "Optional custom TTF/OTF font",
@@ -507,15 +535,16 @@ text = st.text_area("Paste your text", value=default_text, height=360, label_vis
 
 # Build effective settings from a very small user-facing control set.
 dpi = 300
-font_size_px = max(10, int(font_pt * dpi / 72))
+font_pt = 12.0
+font_size_px = int(round(font_pt * dpi / 72))
 
 # Fixed A5 layout tuned to the photographed field-note pages.
-margin_left = 14
-margin_right = 14
-margin_top = 16
-margin_bottom = 16
-line_spacing = 1.55
-tracking = 0.15
+margin_left = 5.5
+margin_right = 5.5
+margin_top = 11.5
+margin_bottom = 12
+line_spacing = 1.0
+tracking = 0.0
 
 # One imperfections slider drives the mechanical behaviour.
 imp = imperfection / 100.0
@@ -568,8 +597,9 @@ cfg = {
     "margin_bottom_mm": margin_bottom,
     # Keep carriage line pitch fixed so Font size changes the LETTER SIZE,
     # not the distance between lines.
-    "line_height_px": mm_to_px(7.2, dpi),
-    "tracking_px": tracking * dpi / 72.0,
+    "line_height_px": mm_to_px(9.0, dpi),
+    "tracking_px": 0.0,
+    "char_pitch_px": mm_to_px(2.54, dpi),
     "seed": int(seed),
     "paper_rgb": (246, 244, 236),
     "paper_warmth": 2,
@@ -592,7 +622,8 @@ page_h = mm_to_px(A5_MM[1], dpi)
 max_text_width = page_w - mm_to_px(margin_left + margin_right, dpi)
 max_text_height = page_h - mm_to_px(margin_top + margin_bottom, dpi)
 
-lines = wrap_text(text, font_for_wrap, max_text_width, cfg["tracking_px"])
+max_chars = max(1, int(max_text_width // cfg["char_pitch_px"]))
+lines = wrap_text_fixed_pitch(text, max_chars)
 lines_per_page = max(1, int(max_text_height // cfg["line_height_px"]))
 pages_lines = [lines[i:i+lines_per_page] for i in range(0, len(lines), lines_per_page)] or [[""]]
 
@@ -615,13 +646,13 @@ if st.button("Generate pages", type="primary", use_container_width=True):
         "imperfections": imperfection,
         "seed": int(seed),
         "dpi": dpi,
-        "font_pt": font_pt,
+        "font_pt": 12.0,
         "page_count": len(rendered),
     }
 
 if "rendered" in st.session_state:
     rendered_bytes = st.session_state["rendered"]
-    st.success(f"Generated {len(rendered_bytes)} true A5 page(s) — 148 × 210 mm, 300 DPI (1748 × 2480 px).")
+    st.success(f"Generated {len(rendered_bytes)} calibrated A5 page(s) — 148 × 210 mm, 300 DPI, fixed 10-CPI typewriter pitch.")
 
     cols = st.columns(min(3, len(rendered_bytes)))
     for i, b in enumerate(rendered_bytes):

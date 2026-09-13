@@ -1,11 +1,22 @@
-# Field Notes Typewriter v7
+# Field Notes Typewriter v8 — calibrated to the uploaded A5 pages
 
-Key changes:
-- Output is true A5: 148 × 210 mm.
-- Export resolution is 300 DPI: approximately 1748 × 2480 pixels.
-- Font size range is now 11–26 pt.
-- Default font size is 16 pt.
-- Font size changes the actual glyph size, not the line spacing.
-- Fixed carriage line pitch keeps the page feeling like a typewriter.
-- Elite remains the recommended face.
-- Ribbon age controls average darkness and random letter-to-letter ink variation.
+This version removes the font-size control completely.
+
+Physical calibration:
+- Page: A5, 148 × 210 mm
+- Resolution: 300 DPI
+- Type size: fixed at ~12 pt
+- Character pitch: fixed 10 CPI / 2.54 mm per keystroke
+- Line pitch: ~9 mm
+- Left/right margin: ~5.5 mm
+- Top margin: ~11.5 mm
+
+These values were chosen from the proportions visible in the uploaded physical A5
+typewriter sheets rather than from a generic digital document layout.
+
+The remaining controls are:
+- Font face
+- Ribbon age
+- Imperfections
+- Optional custom font
+- Page seed
