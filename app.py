@@ -584,7 +584,9 @@ if st.button("Generate pages", type="primary", use_container_width=True):
 
     st.session_state["rendered"] = [png_bytes(im) for im in rendered]
     st.session_state["settings_summary"] = {
-        "preset": preset_name,
+        "font": face,
+        "ribbon_age": ribbon_age,
+        "imperfections": imperfection,
         "seed": int(seed),
         "dpi": dpi,
         "font_pt": font_pt,
