@@ -445,7 +445,7 @@ st.set_page_config(page_title="Field Notes Typewriter", page_icon="⌨️", layo
 
 st.title("Field Notes Typewriter")
 st.caption(
-    "Paste your text, choose a typewriter face and ribbon age, then set how imperfect the machine should feel."
+    "True A5 output (148 × 210 mm at 300 DPI). Choose the typewriter face, ribbon age, font size and imperfection level."
 )
 
 with st.sidebar:
@@ -471,7 +471,7 @@ with st.sidebar:
         help="Controls spacing quirks, line-start variation, rebound and mechanical irregularity. Ribbon age controls most ink variation."
     )
 
-    font_pt = st.slider("Font size", 9, 18, 13)
+    font_pt = st.slider("Font size", 11, 26, 16)
 
     font_upload = st.file_uploader(
         "Optional custom TTF/OTF font",
@@ -506,14 +506,14 @@ Can you repay the money?
 text = st.text_area("Paste your text", value=default_text, height=360, label_visibility="collapsed")
 
 # Build effective settings from a very small user-facing control set.
-dpi = 240
+dpi = 300
 font_size_px = max(10, int(font_pt * dpi / 72))
 
 # Fixed A5 layout tuned to the photographed field-note pages.
-margin_left = 12
-margin_right = 12
-margin_top = 18
-margin_bottom = 18
+margin_left = 14
+margin_right = 14
+margin_top = 16
+margin_bottom = 16
 line_spacing = 1.55
 tracking = 0.15
 
@@ -568,7 +568,7 @@ cfg = {
     "margin_bottom_mm": margin_bottom,
     # Keep carriage line pitch fixed so Font size changes the LETTER SIZE,
     # not the distance between lines.
-    "line_height_px": int((13 * dpi / 72) * line_spacing),
+    "line_height_px": mm_to_px(7.2, dpi),
     "tracking_px": tracking * dpi / 72.0,
     "seed": int(seed),
     "paper_rgb": (246, 244, 236),
@@ -621,7 +621,7 @@ if st.button("Generate pages", type="primary", use_container_width=True):
 
 if "rendered" in st.session_state:
     rendered_bytes = st.session_state["rendered"]
-    st.success(f"Generated {len(rendered_bytes)} A5 page(s).")
+    st.success(f"Generated {len(rendered_bytes)} true A5 page(s) — 148 × 210 mm, 300 DPI (1748 × 2480 px).")
 
     cols = st.columns(min(3, len(rendered_bytes)))
     for i, b in enumerate(rendered_bytes):
