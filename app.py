@@ -6,7 +6,7 @@ import zipfile
 from pathlib import Path
 
 import streamlit as st
-from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance
+from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance, ImageChops
 import numpy as np
 
 
@@ -93,22 +93,83 @@ def mm_to_px(mm, dpi):
     return int(round(mm * dpi / 25.4))
 
 
-def load_font(font_upload, font_size_px):
-    """Use uploaded TTF/OTF if supplied, otherwise common system mono fonts."""
+
+def load_font(font_upload, font_size_px, face="Davoren Pica"):
+    """
+    Internal scaffold only. The visible 'machine face' is modified afterwards
+    into a stable per-key typewriter impression.
+
+    We avoid a distressed-font look: the same physical key gets the same fixed
+    wear pattern every time it appears.
+    """
     if font_upload is not None:
         data = font_upload.getvalue()
         return ImageFont.truetype(io.BytesIO(data), font_size_px)
 
-    candidates = [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
-        "/usr/share/fonts/truetype/liberation2/LiberationMono-Regular.ttf",
-        "/usr/share/fonts/truetype/freefont/FreeMono.ttf",
-    ]
+    if face == "Davoren Elite":
+        candidates = [
+            "/usr/share/fonts/truetype/liberation2/LiberationMono-Regular.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+        ]
+    else:
+        candidates = [
+            "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+            "/usr/share/fonts/truetype/liberation2/LiberationMono-Regular.ttf",
+        ]
+
     for p in candidates:
         if Path(p).exists():
             return ImageFont.truetype(p, font_size_px)
     return ImageFont.load_default()
 
+
+def machine_glyph_mask(ch, font, face, machine_seed, px_scale=1.0):
+    """
+    Build a consistent glyph impression for one physical typebar/key.
+
+    The important realism rule: fixed defects belong to the KEY, not to each
+    occurrence. An 'e' with a worn upper-right edge repeats that wear whenever
+    the same key strikes, while ribbon pressure can still vary per strike.
+    """
+    bbox = font.getbbox(ch)
+    gw = max(16, bbox[2] - bbox[0] + 20)
+    gh = max(20, bbox[3] - bbox[1] + 24)
+
+    mask = Image.new("L", (gw, gh), 0)
+    d = ImageDraw.Draw(mask)
+    d.text((10 - bbox[0], 10 - bbox[1]), ch, font=font, fill=255)
+
+    # Mechanical face shaping: slightly denser, more typebar-like impression.
+    if face == "Davoren Pica":
+        mask = mask.filter(ImageFilter.MaxFilter(3))
+        # Pica: broader / heavier.
+        new_w = max(1, int(mask.width * 1.035))
+        mask = mask.resize((new_w, mask.height), Image.Resampling.LANCZOS)
+    else:
+        # Elite: narrower and a touch lighter.
+        new_w = max(1, int(mask.width * 0.92))
+        mask = mask.resize((new_w, mask.height), Image.Resampling.LANCZOS)
+        mask = mask.filter(ImageFilter.MaxFilter(3))
+
+    # Deterministic physical wear for the key.
+    local_seed = (machine_seed * 1315423911 + ord(ch) * 2654435761) & 0xFFFFFFFF
+    grng = np.random.default_rng(local_seed)
+
+    # Very small fixed chips; these recur identically for the same character.
+    arr = np.array(mask, dtype=np.uint8)
+    ys, xs = np.where(arr > 70)
+    if len(xs) > 0:
+        chip_count = int(grng.integers(0, 3))
+        for _ in range(chip_count):
+            k = int(grng.integers(0, len(xs)))
+            cx, cy = int(xs[k]), int(ys[k])
+            rw = int(grng.integers(1, 3))
+            rh = int(grng.integers(1, 3))
+            x1, x2 = max(0, cx-rw), min(arr.shape[1], cx+rw+1)
+            y1, y2 = max(0, cy-rh), min(arr.shape[0], cy+rh+1)
+            arr[y1:y2, x1:x2] = (arr[y1:y2, x1:x2] * grng.uniform(0.25, 0.65)).astype(np.uint8)
+
+    return Image.fromarray(arr, "L")
 
 def add_paper_texture(img, rng, strength=5.0, warmth=2):
     arr = np.asarray(img).astype(np.int16)
@@ -226,58 +287,60 @@ def apply_layout_quirks(lines, rng, indent_variation=3, extra_space_prob=0.07, e
     return out
 
 
+
 def render_glyph(base, ch, font, x, y, rng, cfg, ink_rgb=(55, 52, 48)):
     """
-    Draw one glyph on its own transparent patch, then rotate and composite.
+    Strike one stable physical key impression.
+
+    No visible up/down character wobble. Variation comes from ribbon pressure,
+    fixed key wear, rare double strikes, and spacing / carriage behavior.
     """
     if ch == " ":
         return
 
-    bbox = font.getbbox(ch)
-    gw = max(4, bbox[2] - bbox[0] + 12)
-    gh = max(4, bbox[3] - bbox[1] + 16)
+    mask = machine_glyph_mask(
+        ch,
+        font,
+        cfg["face"],
+        cfg["machine_seed"],
+    )
 
-    patch = Image.new("RGBA", (gw, gh), (255, 255, 255, 0))
-    d = ImageDraw.Draw(patch)
-
+    # Per-strike ribbon pressure. This changes each occurrence, unlike key wear.
     alpha = int(rng.integers(cfg["opacity_min"], cfg["opacity_max"] + 1))
+    strike_mask = mask.point(lambda p: int(p * alpha / 255))
+
+    # Ribbon can fail to transfer evenly without moving the typebar baseline.
     if rng.random() < cfg["dropout_prob"]:
-        alpha = int(alpha * rng.uniform(0.25, 0.6))
+        a = np.array(strike_mask, dtype=np.uint8)
+        h, w = a.shape
+        band_y = int(rng.integers(0, max(1, h)))
+        thickness = int(rng.integers(1, 3))
+        a[max(0, band_y-thickness):min(h, band_y+thickness+1), :] = (
+            a[max(0, band_y-thickness):min(h, band_y+thickness+1), :] * rng.uniform(0.25, 0.7)
+        ).astype(np.uint8)
+        strike_mask = Image.fromarray(a, "L")
 
-    d.text((6 - bbox[0], 6 - bbox[1]), ch, font=font, fill=(*ink_rgb, alpha))
-
-    # Tiny local ink loss: erase a few hairline fragments on some glyphs
-    if rng.random() < cfg["dropout_prob"] * 1.6:
-        pd = ImageDraw.Draw(patch)
-        for _ in range(int(rng.integers(1, 4))):
-            yy = int(rng.integers(4, max(5, gh - 4)))
-            x1 = int(rng.integers(3, max(4, gw // 2)))
-            x2 = min(gw - 2, x1 + int(rng.integers(2, max(3, gw // 3))))
-            pd.line((x1, yy, x2, yy), fill=(255, 255, 255, int(rng.integers(25, 90))), width=1)
+    patch = Image.new("RGBA", strike_mask.size, (*ink_rgb, 0))
+    patch.putalpha(strike_mask)
 
     if cfg["blur"] > 0:
         patch = patch.filter(ImageFilter.GaussianBlur(cfg["blur"]))
 
-    angle = float(rng.normal(0, cfg["rotation"]))
-    patch = patch.rotate(angle, resample=Image.Resampling.BICUBIC, expand=True)
-
+    # Horizontal registration can vary slightly. Vertical stays locked.
     jx = float(rng.normal(0, cfg["jitter_x"]))
-    jy = float(rng.normal(0, cfg["jitter_y"]))
-
-    px = int(round(x + jx - 6))
-    py = int(round(y + jy - 6))
+    px = int(round(x + jx))
+    py = int(round(y))
     base.alpha_composite(patch, (px, py))
 
+    # Rare carriage/typebar rebound. Mostly horizontal, almost never vertical.
     if rng.random() < cfg["double_strike_prob"]:
         ghost = patch.copy()
-        # Make ghost lighter
-        a = ghost.getchannel("A").point(lambda p: int(p * 0.42))
+        a = ghost.getchannel("A").point(lambda p: int(p * 0.35))
         ghost.putalpha(a)
-        off = cfg["double_strike_offset"]
-        gx = int(round(px + rng.choice([-1, 1]) * off))
-        gy = int(round(py + rng.choice([-1, 0, 1]) * off * 0.45))
+        off = max(1, int(round(cfg["double_strike_offset"])))
+        gx = px + int(rng.choice([-1, 1]) * off)
+        gy = py
         base.alpha_composite(ghost, (gx, gy))
-
 
 def render_page(lines, page_index, settings, font_upload=None, reference_image=None):
     dpi = settings["dpi"]
@@ -307,7 +370,7 @@ def render_page(lines, page_index, settings, font_upload=None, reference_image=N
         paper = Image.blend(paper, ref_rgb, alpha=min(alpha, 0.12))
 
     base = paper.convert("RGBA")
-    font = load_font(font_upload, settings["font_size_px"])
+    font = load_font(font_upload, settings["font_size_px"], settings["face"])
 
     margin_left = mm_to_px(settings["margin_left_mm"], dpi)
     margin_top = mm_to_px(settings["margin_top_mm"], dpi)
@@ -327,19 +390,18 @@ def render_page(lines, page_index, settings, font_upload=None, reference_image=N
         line = item["text"]
         y = margin_top + li * nominal_line_h
 
-        # Keep the whole sentence/line on a mostly straight mechanical baseline.
-        line_wander = float(rng.normal(0, settings["baseline_wander"]))
+        # Mechanical carriage: the entire line shares one locked baseline.
+        # We deliberately avoid per-character vertical movement.
+        line_wander = 0.0
         x = float(margin_left + item["indent"] + rng.normal(0, settings["line_start_jitter"]))
 
         for ci, ch in enumerate(line):
-            # Only tiny character-level movement; no "wavy" handwriting effect.
-            char_baseline = line_wander + float(rng.normal(0, settings["micro_baseline_jitter"]))
             render_glyph(
                 base,
                 ch,
                 font,
                 x,
-                y + char_baseline,
+                y,
                 rng,
                 settings,
                 ink_rgb=settings["ink_rgb"]
@@ -368,13 +430,20 @@ st.set_page_config(page_title="Field Notes Typewriter", page_icon="⌨️", layo
 
 st.title("Field Notes Typewriter")
 st.caption(
-    "A deterministic typewriter renderer: your text stays editable, but each page gets controlled analogue imperfections."
+    "A mechanical typewriter renderer: straight carriage baselines, stable worn keys, uneven ribbon pressure and human spacing quirks."
 )
 
 with st.sidebar:
     st.header("Page")
     preset_name = st.selectbox("Preset", list(PRESETS.keys()), index=0)
     preset = PRESETS[preset_name].copy()
+
+    face = st.selectbox(
+        "Machine face",
+        ["Davoren Pica", "Davoren Elite"],
+        index=0,
+        help="Pica is broader/heavier; Elite is narrower and more compact."
+    )
 
     dpi = st.select_slider("Output DPI", options=[150, 200, 240, 300], value=240)
     font_pt = st.slider("Type size", 9, 18, 12)
@@ -389,12 +458,16 @@ with st.sidebar:
     tracking = st.slider("Tracking", -1.0, 3.0, 0.15, 0.05)
 
     st.header("Layout quirks")
-    indent_variation = st.slider("Paragraph / sentence indent variation", 0, 10, 3)
-    extra_space_prob = st.slider("Occasional double-space chance", 0.0, 0.25, 0.07, 0.01)
+    indent_variation = st.slider("Line / paragraph start variation", 0, 10, 3)
+    extra_space_prob = st.slider("Occasional double-space chance", 0.0, 0.20, 0.05, 0.01)
     extra_space_amount = st.slider("Extra-space strength", 1.0, 3.0, 1.8, 0.1)
 
     st.header("Imperfections")
-    intensity = st.slider("Overall imperfection", 0.0, 2.0, 1.0, 0.05)
+    intensity = st.slider(
+        "Mechanical imperfection",
+        0.0, 2.0, 0.8, 0.05,
+        help="Affects ink, horizontal registration and spacing — not wavy baselines."
+    )
     ink_fade = st.slider("Ink fade", 0.0, 1.0, 0.08, 0.01)
     paper_noise_override = st.slider("Paper texture", 0.0, 12.0, float(preset["paper_noise"]), 0.5)
     seed = st.number_input("Random seed", min_value=0, max_value=9999999, value=650, step=1)
@@ -435,11 +508,16 @@ cfg = PRESETS[preset_name].copy()
 
 # Scale imperfection-related values
 for key in [
-    "jitter_x", "jitter_y", "rotation",
+    "jitter_x",
     "double_strike_prob", "dropout_prob",
-    "char_spacing_jitter", "baseline_wander", "blur"
+    "char_spacing_jitter", "blur"
 ]:
     cfg[key] *= intensity
+
+# A typewriter carriage is mechanically straight within a line.
+cfg["jitter_y"] = 0.0
+cfg["rotation"] = 0.0
+cfg["baseline_wander"] = 0.0
 
 # Fade lowers alpha range
 fade_amt = int(ink_fade * 90)
@@ -461,9 +539,11 @@ cfg.update({
     "paper_warmth": 2,
     "ink_rgb": (52, 49, 45),
     "reference_texture_strength": ref_strength,
-    "line_start_jitter": 0.35 * intensity,
-    "micro_baseline_jitter": 0.04 * intensity,
+    "line_start_jitter": 0.22 * intensity,
+    "micro_baseline_jitter": 0.0,
     "indent_variation": int(indent_variation * dpi / 240),
+    "face": face,
+    "machine_seed": 650,
     "extra_space_prob": extra_space_prob,
     "extra_space_amount": extra_space_amount,
 })
@@ -472,7 +552,7 @@ reference_image = None
 if ref_upload is not None:
     reference_image = Image.open(ref_upload).convert("RGB")
 
-font_for_wrap = load_font(font_upload, font_size_px)
+font_for_wrap = load_font(font_upload, font_size_px, face)
 page_w = mm_to_px(A5_MM[0], dpi)
 page_h = mm_to_px(A5_MM[1], dpi)
 max_text_width = page_w - mm_to_px(margin_left + margin_right, dpi)
@@ -537,10 +617,11 @@ with st.expander("Why this is useful"):
     st.write(
         """
         This does not ask an image model to invent a page. It renders your actual text
-        character by character, then adds small seeded imperfections: uneven ink,
-        occasional double strikes, local dropouts, small line-start differences,
-        occasional extra word spacing, and paper texture. The baseline is intentionally
-        kept mostly straight so it feels mechanical rather than wavy.
+        character by character using a stable simulated machine face. Each physical
+        key has its own repeatable wear pattern, while ribbon pressure varies by strike.
+        The carriage baseline stays locked. Imperfection comes from ink transfer,
+        occasional rebound/double strikes, line-start differences, double spaces and
+        paper texture — not random vertical wobble.
 
         Because the random seed is fixed, a page can be regenerated exactly. Change the
         seed when you want a different physical-looking copy.
